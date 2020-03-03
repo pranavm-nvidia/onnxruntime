@@ -64,5 +64,8 @@ struct SessionOptions {
   // For models with free input dimensions (most commonly batch size), specifies a set of values to override those
   // free dimensions with, keyed by dimension denotation.
   std::vector<FreeDimensionOverride> free_dimension_overrides;
+
+  bool thread_pool_allow_spinning = true;
+  unsigned int stack_size = 0;
 };
 }  // namespace onnxruntime

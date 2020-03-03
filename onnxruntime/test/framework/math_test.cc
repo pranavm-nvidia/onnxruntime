@@ -29,7 +29,8 @@ class MathGemmTest : public testing::TestWithParam<int> {
   static concurrency::ThreadPool* CreateThreadPool(int size) {
     if (size == 1)
       return nullptr;
-    return new concurrency::ThreadPool("test", size);
+    return new concurrency::ThreadPool(&onnxruntime::Env::Default(), ThreadOptions(), ORT_TSTR("MathGemmTest"), size,
+                                       true);
   }
   std::unique_ptr<concurrency::ThreadPool> tp{CreateThreadPool(GetParam())};
 };
