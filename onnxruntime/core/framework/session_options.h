@@ -66,6 +66,9 @@ struct SessionOptions {
   std::vector<FreeDimensionOverride> free_dimension_overrides;
 
   bool thread_pool_allow_spinning = true;
+
+  //The default stack size for Windows EXEs is 1MB. And mlas requires 64KB to use. So usually it's fine.
+  //But if the default setting was changed to a lower value, then this option can be used to adjust it back.
   unsigned int stack_size = 0;
 };
 }  // namespace onnxruntime

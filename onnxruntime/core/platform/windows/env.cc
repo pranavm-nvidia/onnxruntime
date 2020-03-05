@@ -31,25 +31,11 @@ limitations under the License.
 #include "core/platform/scoped_resource.h"
 #include "core/platform/windows/telemetry.h"
 #include "unsupported/Eigen/CXX11/src/ThreadPool/ThreadPoolInterface.h"
+#include <wil/Resource.h>
 
 namespace onnxruntime {
 
 namespace {
-
-struct FileHandleTraits {
-  using Handle = HANDLE;
-  static Handle GetInvalidHandleValue() noexcept {
-    return INVALID_HANDLE_VALUE;
-  }
-  static void CleanUp(Handle h) noexcept {
-    if (!CloseHandle(h)) {
-      const int err = GetLastError();
-      // It indicates potential data loss
-      LOGS_DEFAULT(ERROR) << "Failed to close file handle - error code: " << err;
-    }
-  }
-};
-
 class WindowsThread : public EnvThread {
  private:
   struct Param {
@@ -63,17 +49,21 @@ class WindowsThread : public EnvThread {
  public:
   WindowsThread(const ORTCHAR_T* name_prefix, int index,
                 unsigned (*start_address)(int id, Eigen::ThreadPoolInterface* param), Eigen::ThreadPoolInterface* param,
-                const ThreadOptions& thread_options) {
-    hThread = (HANDLE)_beginthreadex(nullptr, thread_options.StackSize, ThreadMain,
-                                     new Param{name_prefix, index, start_address, param, thread_options}, 0, &threadID);
+                const ThreadOptions& thread_options): hThread((HANDLE)_beginthreadex(nullptr, thread_options.StackSize, ThreadMain,
+                                       new Param{name_prefix, index, start_address, param, thread_options}, 0,
+                                       &threadID))
+  {    
   }
 
   ~WindowsThread() {
-    WaitForSingleObject(hThread, INFINITE);
-    CloseHandle(hThread);
+    DWORD waitStatus = WaitForSingleObject(hThread.get(), INFINITE);
+    FAIL_FAST_LAST_ERROR_IF(waitStatus == WAIT_FAILED);
   }
+  
   // This function is called when the threadpool is cancelled.
+  // TODO: Find a way to avoid calling TerminateThread
   void OnCancel() {
+    TerminateThread(hThread.get(), 1);
   }
 
  private:
@@ -106,12 +96,9 @@ class WindowsThread : public EnvThread {
     delete p;
     return ret;
   }
-  unsigned threadID;
-  HANDLE hThread;
+  unsigned threadID = 0;
+  wil::unique_handle hThread;
 };
-// Note: File handle cleanup may fail but this class doesn't expose a way to check if it failed.
-//       If that's important, consider using another cleanup method.
-using ScopedFileHandle = ScopedResource<FileHandleTraits>;
 
 class WindowsEnv : public Env {
  public:
@@ -166,10 +153,10 @@ class WindowsEnv : public Env {
   }
 
   Status GetFileLength(const ORTCHAR_T* file_path, size_t& length) const override {
-    ScopedFileHandle file_handle{
+    wil::unique_hfile file_handle{
         CreateFileW(file_path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL)};
     LARGE_INTEGER filesize;
-    if (!GetFileSizeEx(file_handle.Get(), &filesize)) {
+    if (!GetFileSizeEx(file_handle.get(), &filesize)) {
       const int err = GetLastError();
       return ORT_MAKE_STATUS(ONNXRUNTIME, FAIL, "GetFileSizeEx ", ToMBString(file_path), " fail, errcode = ", err);
     }
@@ -186,9 +173,9 @@ class WindowsEnv : public Env {
     ORT_RETURN_IF_NOT(offset >= 0);
     ORT_RETURN_IF_NOT(length <= buffer.size());
 
-    ScopedFileHandle file_handle{
+    wil::unique_hfile file_handle{
         CreateFileW(file_path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL)};
-    if (!file_handle.IsValid()) {
+    if (file_handle.get() == INVALID_HANDLE_VALUE) {
       const int err = GetLastError();
       return ORT_MAKE_STATUS(ONNXRUNTIME, FAIL, "open file ", ToMBString(file_path), " fail, errcode = ", err);
     }
@@ -199,7 +186,7 @@ class WindowsEnv : public Env {
     if (offset > 0) {
       LARGE_INTEGER current_position;
       current_position.QuadPart = offset;
-      if (!SetFilePointerEx(file_handle.Get(), current_position, &current_position, FILE_BEGIN)) {
+      if (!SetFilePointerEx(file_handle.get(), current_position, &current_position, FILE_BEGIN)) {
         const int err = GetLastError();
         return ORT_MAKE_STATUS(ONNXRUNTIME, FAIL, "SetFilePointerEx ", ToMBString(file_path), " fail, errcode = ", err);
       }
@@ -212,7 +199,7 @@ class WindowsEnv : public Env {
       const DWORD bytes_to_read = static_cast<DWORD>(std::min<size_t>(bytes_remaining, k_max_bytes_to_read));
       DWORD bytes_read;
 
-      if (!ReadFile(file_handle.Get(), buffer.data() + total_bytes_read, bytes_to_read, &bytes_read, nullptr)) {
+      if (!ReadFile(file_handle.get(), buffer.data() + total_bytes_read, bytes_to_read, &bytes_read, nullptr)) {
         const int err = GetLastError();
         return ORT_MAKE_STATUS(ONNXRUNTIME, FAIL, "ReadFile ", ToMBString(file_path), " fail, errcode = ", err);
       }

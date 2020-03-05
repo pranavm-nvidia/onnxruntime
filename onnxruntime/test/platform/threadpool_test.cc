@@ -12,6 +12,10 @@
 #include <functional>
 #include <mutex>
 
+#ifdef _WIN32
+#include <Windows.h>
+#endif
+
 using namespace onnxruntime::concurrency;
 
 namespace {
@@ -98,56 +102,38 @@ TEST(ThreadPoolTest, TestBatchParallelFor_2_Thread_81_Task_20_Batch) {
   TestBatchParallelFor("TestBatchParallelFor_2_Thread_81_Task_20_Batch", 2, 81, 20);
 }
 
-// Sadly, Eigen threadpool doesn't support nested parallelFor. Java can do it, C# can do it, TBB can do it,
-// but not Eigen.
-// TEST(ThreadPoolTest, Nested) {
-//  const int num_threads = 10;
-//  ThreadPool tp(&Env::Default(), ThreadOptions(), "", num_threads, true, nullptr);
-//  onnxruntime::Notification finished;
-//  tp.AsEigenThreadPool()->Schedule([&finished, &tp, num_threads]() {
-//    onnxruntime::Barrier b(num_threads);
-//    tp.device().parallelFor(
-//        num_threads,
-//        Eigen::TensorOpCost(std::numeric_limits<float>::max(), std::numeric_limits<float>::max(),
-//                            std::numeric_limits<float>::max()),
-//        [num_threads, &b, &tp](Eigen::Index start, Eigen::Index end) {
-//          ASSERT_EQ(start + 1, end);
-//          b.Notify();
-//          b.Wait();
-//          tp.device().parallelFor(
-//              num_threads,
-//              Eigen::TensorOpCost(std::numeric_limits<float>::max(), std::numeric_limits<float>::max(),
-//                                  std::numeric_limits<float>::max()),
-//              [&tp](Eigen::Index, Eigen::Index) {
-//                  auto id = tp.AsEigenThreadPool()->CurrentThreadId();
-//                  std::cout << "Thread "<<id << ": test output from nested loop" << std::endl; });
-//        });
-//    finished.Notify();
-//  });
-//  finished.Wait();
-//}
-//
-// TEST(ThreadPoolTest, Nested2) {
-//  const int num_threads = 10;
-//  ThreadPool tp(&Env::Default(), ThreadOptions(), "", num_threads, true, nullptr);
-//  onnxruntime::Notification finished;
-//  tp.AsEigenThreadPool()->Schedule([&finished, &tp, num_threads]() {
-//    onnxruntime::Barrier b(num_threads);
-//    concurrency::ThreadPool::SchedulingParams sp(concurrency::ThreadPool::SchedulingStrategy::kFixedBlockSize,
-//                                                 optional<int64_t>(), optional<int64_t>(1));
-//
-//    tp.ParallelFor(num_threads, sp, [num_threads, &b, &tp, sp](Eigen::Index start, Eigen::Index end) {
-//      ASSERT_EQ(start + 1, end);
-//      b.Notify();
-//      b.Wait();
-//      tp.ParallelFor(num_threads, sp,
-//                     [&tp](Eigen::Index, Eigen::Index) {
-//              auto id = tp.AsEigenThreadPool()->CurrentThreadId();
-//        std::cout << "Thread " << id << ": test output from nested loop" << std::endl;
-//      });
-//    });
-//  });
-//  finished.Wait();
-//}
+#ifdef _WIN32
+int compare(const void* arg1, const void* arg2) {
+  /* Compare all of both strings: */
+  return _stricmp(*(char**)arg1, *(char**)arg2);
+}
+TEST(ThreadPoolTest, TestStackSize) {
+  const char* str[] = {"boy", "deserves", "every", "favor", "good"};
+  qsort((void*)str, (size_t)5, sizeof(char*), compare);
+
+  ThreadOptions to;
+  //For ARM, x86 and x64 machines, the default stack size is 1 MB
+  //We change it to a different value to see if the setting works
+  to.StackSize = 8 * 1024 * 1024;
+  auto tp = onnxruntime::make_unique<ThreadPool>(&onnxruntime::Env::Default(), to, nullptr, 2, true);
+  typedef void(WINAPI * FnGetCurrentThreadStackLimits)(_Out_ PULONG_PTR LowLimit, _Out_ PULONG_PTR HighLimit);
+
+  Notification n;
+  ULONG_PTR low_limit, high_limit;
+  bool has_thread_limit_info = false;
+  tp->Schedule([&]() {
+    FnGetCurrentThreadStackLimits GetTS = (FnGetCurrentThreadStackLimits)GetProcAddress(
+        GetModuleHandle(TEXT("kernel32.dll")), "GetCurrentThreadStackLimits");
+    if (GetTS != nullptr) {      
+      GetTS(&low_limit, &high_limit);
+      has_thread_limit_info = true;
+    }
+    n.Notify();
+  });
+  n.Wait();
+  if (has_thread_limit_info)
+    ASSERT_EQ(high_limit - low_limit, to.StackSize);
+}
+#endif
 
 }  // namespace onnxruntime

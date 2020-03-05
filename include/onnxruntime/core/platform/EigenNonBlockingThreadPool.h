@@ -641,14 +641,16 @@ class ThreadPoolTempl : public Eigen::ThreadPoolInterface {
 
   void Cancel() override {
     cancelled_ = true;
-    done_ = true;
-
-    // Let each thread know it's been cancelled.
-#ifdef EIGEN_THREAD_ENV_SUPPORTS_CANCELLATION
-    for (size_t i = 0; i < thread_data_.size(); i++) {
-      thread_data_[i].thread->OnCancel();
+    //If done_ is true, which means this object is being destructing.
+    //Therefore thread_data_[i].thread could be NULL.
+    if (!done_) {
+      done_ = true;
+      // Let each thread know it's been cancelled.
+      for (size_t i = 0; i < thread_data_.size(); i++) {
+        assert(thread_data_[i].thread != nullptr);
+        thread_data_[i].thread->OnCancel();
+      }
     }
-#endif
 
     // Wake up the threads without work to let them exit on their own.
     ec_.Notify(true);

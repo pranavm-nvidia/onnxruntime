@@ -836,6 +836,7 @@ set(VERSION_MINOR_PART   0 CACHE STRING "Second part of numeric file/product ver
 set(VERSION_BUILD_PART       0 CACHE STRING "Third part of numeric file/product version.")
 set(VERSION_PRIVATE_PART     0 CACHE STRING "Fourth part of numeric file/product version.")
 set(VERSION_STRING       "Internal Build" CACHE STRING "String representation of file/product version.")
+include(wil.cmake)
 
 if (onnxruntime_USE_WINML)
   # WINML uses and depends on the shared lib.  Note:  You can build WINML without DML and you will get a 
@@ -845,7 +846,6 @@ if (onnxruntime_USE_WINML)
         FATAL_ERROR 
         "Option onnxruntime_USE_WINML can only be used when onnxruntime_BUILD_SHARED_LIB is also enabled")
   endif()
-  include(wil.cmake)
   include(winml.cmake)
 endif() # if(onnxruntime_USE_WINML)
 
